@@ -28,6 +28,7 @@ test-results
 storybook-static
 
 *.png
+!terragraph.png
 
 CLAUDE.md
 PROMPT.md

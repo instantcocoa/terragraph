@@ -91,15 +91,30 @@
 		{/if}
 	</div>
 
-	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<div class="resize-handle horizontal" onmousedown={() => startDrag('bottom')}></div>
+	{#if !bottomCollapsed || workspace.validating || workspace.planning}
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div class="resize-handle horizontal" onmousedown={() => startDrag('bottom')}></div>
+	{/if}
 
 	<div
 		class="bottom-area"
 		class:collapsed={bottomCollapsed && !workspace.validating && !workspace.planning}
 		style="height:{bottomCollapsed && !workspace.validating && !workspace.planning ? 'auto' : `${bottomHeight}px`};"
 	>
-		<BottomPanel collapsed={bottomCollapsed} />
+		<div class="bottom-toolbar">
+			<button class="bottom-toggle" onclick={() => (bottomCollapsed = !bottomCollapsed)}>
+				{bottomCollapsed ? '▴ Show Panel' : '▾ Hide Panel'}
+			</button>
+			{#if workspace.diagnostics.length > 0}
+				<span class="bottom-badge error">{workspace.diagnostics.length} issues</span>
+			{/if}
+			{#if workspace.planSummary}
+				<span class="bottom-badge info">Plan: {workspace.planSummary.create + workspace.planSummary.update + workspace.planSummary.delete + workspace.planSummary.replace} changes</span>
+			{/if}
+		</div>
+		{#if !bottomCollapsed || workspace.validating || workspace.planning}
+			<BottomPanel collapsed={false} />
+		{/if}
 	</div>
 
 	{#if workspace.showAddDialog}
@@ -225,5 +240,47 @@
 
 	.bottom-area.collapsed {
 		height: auto !important;
+	}
+
+	.bottom-toolbar {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 0 8px;
+		height: 28px;
+		flex-shrink: 0;
+		border-top: 1px solid var(--border);
+		background: var(--bg-panel);
+	}
+
+	.bottom-toggle {
+		font-size: 12px;
+		color: var(--text-muted);
+		background: none;
+		border: none;
+		cursor: pointer;
+		padding: 2px 6px;
+		border-radius: 3px;
+	}
+
+	.bottom-toggle:hover {
+		color: var(--text);
+		background: var(--bg-hover);
+	}
+
+	.bottom-badge {
+		font-size: 12px;
+		padding: 1px 8px;
+		border-radius: 8px;
+	}
+
+	.bottom-badge.error {
+		background: rgba(239, 68, 68, 0.15);
+		color: #ef4444;
+	}
+
+	.bottom-badge.info {
+		background: rgba(122, 162, 247, 0.15);
+		color: var(--accent);
 	}
 </style>

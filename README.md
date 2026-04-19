@@ -1,6 +1,8 @@
-# TerraGraph IDE
+# TerraGraph
 
-A visual Terraform infrastructure IDE with graph editing, inspector panels, HCL source sync, live validation, and plan visualization.
+A visual Terraform graph editor and inspector. Load any Terraform workspace, visualize resources as an interactive graph, edit HCL through a structured inspector or raw editor, run validation and plan previews, and manage infrastructure visually.
+
+![TerraGraph](terragraph.png)
 
 ## Architecture
 
