@@ -1,0 +1,77 @@
+@import 'tailwindcss';
+
+/* Tokyo Night - soft dark with blue undertones */
+:root, .theme-dark {
+	color-scheme: dark;
+	--bg-base: #1a1b26;
+	--bg-panel: #1f2133;
+	--bg-hover: rgba(122, 162, 247, 0.06);
+	--bg-input: #15161e;
+	--border: #2f3146;
+	--text: #c0caf5;
+	--text-muted: #7982a9;
+	--text-subtle: #565f89;
+	--accent: #7aa2f7;
+}
+
+/* Clean Light */
+.theme-light {
+	color-scheme: light;
+	--bg-base: #fafbfc;
+	--bg-panel: #f0f1f4;
+	--bg-hover: rgba(79, 107, 237, 0.06);
+	--bg-input: #ffffff;
+	--border: #d8dae5;
+	--text: #1e1e2e;
+	--text-muted: #6c6f85;
+	--text-subtle: #9ca0b0;
+	--accent: #4f6bed;
+}
+
+/* Solarized Dark */
+.theme-solarized {
+	color-scheme: dark;
+	--bg-base: #002b36;
+	--bg-panel: #073642;
+	--bg-hover: rgba(38, 139, 210, 0.08);
+	--bg-input: #00212b;
+	--border: #2a5662;
+	--text: #fdf6e3;
+	--text-muted: #93a1a1;
+	--text-subtle: #657b83;
+	--accent: #268bd2;
+}
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+	margin: 0;
+	padding: 0;
+}
+
+html, body {
+	overflow: hidden !important;
+	width: 100% !important;
+	height: 100% !important;
+	max-width: 100vw !important;
+	max-height: 100vh !important;
+	margin: 0 !important;
+	padding: 0 !important;
+}
+
+body {
+	font-family:
+		-apple-system,
+		BlinkMacSystemFont,
+		'Segoe UI',
+		Roboto,
+		Oxygen,
+		Ubuntu,
+		Cantarell,
+		sans-serif;
+	font-size: 14px;
+	line-height: 1.5;
+	background: var(--bg-base);
+	color: var(--text);
+}
