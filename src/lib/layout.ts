@@ -1,94 +1,116 @@
 import { Graph, layout } from '@dagrejs/dagre';
 import type { GraphLabel } from '@dagrejs/dagre';
 
-const NODE_WIDTH = 220;
-const NODE_HEIGHT = 80;
-const RANK_SEP = 100;
-const NODE_SEP = 50;
+const NODE_WIDTH = 200;
+const NODE_HEIGHT = 72;
 
-// Rank order: top to bottom logical flow
-// Lower number = higher on screen
-const KIND_RANK: Record<string, number> = {
-	terraform: 0,
-	provider: 0,
-	variable: 1,
+const KIND_TIER: Record<string, number> = {
+	resource: 0,
+	module: 0,
+	data: 1,
 	local: 2,
-	data: 3,
-	resource: 4,
-	module: 4,
-	output: 5
+	variable: 3,
+	output: 4
 };
 
-/**
- * Computes a deterministic top-to-bottom DAG layout.
- *
- * - Nodes are grouped by kind into vertical tiers (variables top, resources middle, outputs bottom)
- * - Connected nodes are placed near each other
- * - Alphabetical sorting within tiers ensures consistent layout
- * - Same input always produces the same output
- */
+const LEFT_COLUMN = new Set(['provider', 'terraform']);
+
 export function layoutGraph(
 	nodes: Array<{ id: string; kind?: string; name?: string }>,
 	edges: Array<{ source: string; target: string }>
 ): Map<string, { x: number; y: number }> {
 	if (nodes.length === 0) return new Map();
 
-	const g = new Graph<GraphLabel>();
+	const positions = new Map<string, { x: number; y: number }>();
+	const mainNodes = nodes.filter((n) => !LEFT_COLUMN.has(n.kind ?? ''));
+	const leftNodes = nodes.filter((n) => LEFT_COLUMN.has(n.kind ?? ''));
 
-	g.setGraph({
-		rankdir: 'TB',
-		ranksep: RANK_SEP,
-		nodesep: NODE_SEP,
-		align: 'UL'
-	});
+	if (mainNodes.length > 0) {
+		const g = new Graph<GraphLabel>();
+		g.setGraph({ rankdir: 'TB', ranksep: 90, nodesep: 35 });
+		g.setDefaultEdgeLabel(() => ({}));
 
-	g.setDefaultEdgeLabel(() => ({}));
+		const nodeTier = new Map<string, number>();
+		for (const node of mainNodes) {
+			nodeTier.set(node.id, KIND_TIER[node.kind ?? ''] ?? 2);
+		}
 
-	// Sort nodes alphabetically by kind-rank then name for deterministic ordering
-	const sortedNodes = [...nodes].sort((a, b) => {
-		const rankA = KIND_RANK[a.kind as string] ?? 4;
-		const rankB = KIND_RANK[b.kind as string] ?? 4;
-		if (rankA !== rankB) return rankA - rankB;
-		return (a.name as string ?? a.id).localeCompare(b.name as string ?? b.id);
-	});
+		// Sort deterministically
+		const sorted = [...mainNodes].sort((a, b) => {
+			const tA = KIND_TIER[a.kind ?? ''] ?? 2;
+			const tB = KIND_TIER[b.kind ?? ''] ?? 2;
+			if (tA !== tB) return tA - tB;
+			return (a.name ?? a.id).localeCompare(b.name ?? b.id);
+		});
 
-	for (const node of sortedNodes) {
-		g.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
-	}
+		for (const node of sorted) {
+			g.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
+		}
 
-	// Add invisible edges between tiers to enforce vertical ordering.
-	// Connect one representative node from each tier to the next tier.
-	const tiers = new Map<number, string[]>();
-	for (const node of sortedNodes) {
-		const rank = KIND_RANK[node.kind as string] ?? 4;
-		if (!tiers.has(rank)) tiers.set(rank, []);
-		tiers.get(rank)!.push(node.id);
-	}
+		// Add all edges, reversing any that go upward in tier order
+		const mainIds = new Set(mainNodes.map((n) => n.id));
+		for (const edge of edges) {
+			if (!mainIds.has(edge.source) || !mainIds.has(edge.target)) continue;
+			const srcTier = nodeTier.get(edge.source) ?? 2;
+			const tgtTier = nodeTier.get(edge.target) ?? 2;
 
-	const tierKeys = [...tiers.keys()].sort();
-	for (let i = 0; i < tierKeys.length - 1; i++) {
-		const currentTier = tiers.get(tierKeys[i])!;
-		const nextTier = tiers.get(tierKeys[i + 1])!;
-		// Add a hidden edge from the first node of each tier to enforce ordering
-		g.setEdge(currentTier[0], nextTier[0], { weight: 0, minlen: 1, style: 'invis' });
-	}
+			if (srcTier <= tgtTier) {
+				g.setEdge(edge.source, edge.target);
+			} else {
+				g.setEdge(edge.target, edge.source);
+			}
+		}
 
-	// Add real edges - these pull connected nodes together
-	for (const edge of edges) {
-		// Check both nodes exist
-		if (g.hasNode(edge.source) && g.hasNode(edge.target)) {
-			g.setEdge(edge.source, edge.target, { weight: 2 });
+		// Chain one node per tier to enforce ordering when no edges exist between tiers
+		const tiers = new Map<number, string>();
+		for (const node of sorted) {
+			const t = nodeTier.get(node.id) ?? 2;
+			if (!tiers.has(t)) tiers.set(t, node.id);
+		}
+		const tierKeys = [...tiers.keys()].sort();
+		for (let i = 0; i < tierKeys.length - 1; i++) {
+			const a = tiers.get(tierKeys[i])!;
+			const b = tiers.get(tierKeys[i + 1])!;
+			if (!g.hasEdge(a, b)) {
+				g.setEdge(a, b, { weight: 0, minlen: 1 });
+			}
+		}
+
+		try {
+			layout(g);
+			for (const node of sorted) {
+				const laid = g.node(node.id);
+				if (laid) positions.set(node.id, { x: laid.x, y: laid.y });
+			}
+		} catch {
+			// Fallback: simple grid
+			for (let i = 0; i < sorted.length; i++) {
+				positions.set(sorted[i].id, {
+					x: (i % 4) * (NODE_WIDTH + 40),
+					y: Math.floor(i / 4) * (NODE_HEIGHT + 40)
+				});
+			}
 		}
 	}
 
-	layout(g);
+	// Left column
+	if (leftNodes.length > 0) {
+		let minX = Infinity;
+		let firstY = 0;
+		for (const pos of positions.values()) {
+			if (pos.x < minX) { minX = pos.x; firstY = pos.y; }
+		}
+		if (!isFinite(minX)) { minX = NODE_WIDTH; firstY = 0; }
 
-	const positions = new Map<string, { x: number; y: number }>();
-
-	for (const node of sortedNodes) {
-		const laid = g.node(node.id);
-		if (laid) {
-			positions.set(node.id, { x: laid.x, y: laid.y });
+		const leftX = minX - NODE_WIDTH - 80;
+		const sortedLeft = [...leftNodes].sort((a, b) =>
+			(a.name ?? a.id).localeCompare(b.name ?? b.id)
+		);
+		for (let i = 0; i < sortedLeft.length; i++) {
+			positions.set(sortedLeft[i].id, {
+				x: leftX,
+				y: firstY + i * (NODE_HEIGHT + 20)
+			});
 		}
 	}
 

@@ -52,15 +52,44 @@
 		})
 	);
 
+	// Color edges by the source node's kind
+	const nodeKindMap = $derived(new Map(workspace.nodes.map((n) => [n.id, n.kind])));
+
+	const EDGE_COLORS: Record<string, string> = {
+		resource: '#3b82f680',
+		data: '#8b5cf680',
+		module: '#f59e0b80',
+		variable: '#10b98180',
+		local: '#06b6d480',
+		output: '#f43f5e80',
+		provider: '#6366f180'
+	};
+
 	let flowEdges = $derived<Edge[]>(
-		workspace.edges.map((edge) => ({
-			id: edge.id,
-			source: edge.source,
-			target: edge.target,
-			type: 'smoothstep',
-			animated: edge.kind === 'reference',
-			style: edge.kind === 'depends_on' ? 'stroke: #f59e0b; stroke-dasharray: 5 5;' : 'stroke: #52525b;'
-		}))
+		workspace.edges.map((edge) => {
+			const sourceKind = nodeKindMap.get(edge.source) ?? '';
+			const color = EDGE_COLORS[sourceKind] ?? '#52525b60';
+
+			if (edge.kind === 'depends_on') {
+				return {
+					id: edge.id,
+					source: edge.source,
+					target: edge.target,
+					type: 'smoothstep',
+					animated: false,
+					style: `stroke: #f59e0b; stroke-width: 1.5; stroke-dasharray: 6 4;`
+				};
+			}
+
+			return {
+				id: edge.id,
+				source: edge.source,
+				target: edge.target,
+				type: 'smoothstep',
+				animated: false,
+				style: `stroke: ${color}; stroke-width: 1.5;`
+			};
+		})
 	);
 </script>
 

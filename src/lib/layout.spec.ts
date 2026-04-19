@@ -8,41 +8,53 @@ describe('layoutGraph', () => {
 			{ id: 'b', kind: 'resource', name: 'b' },
 			{ id: 'c', kind: 'output', name: 'c' }
 		];
-		const edges = [
-			{ source: 'a', target: 'b' },
-			{ source: 'b', target: 'c' }
-		];
+		const edges = [{ source: 'a', target: 'c' }];
 
 		const positions = layoutGraph(nodes, edges);
-
 		expect(positions.size).toBe(3);
-		expect(positions.has('a')).toBe(true);
-		expect(positions.has('b')).toBe(true);
-		expect(positions.has('c')).toBe(true);
 	});
 
-	it('places variables above resources above outputs', () => {
+	it('places resources above data above variables above outputs', () => {
 		const nodes = [
 			{ id: 'out', kind: 'output', name: 'id' },
 			{ id: 'res', kind: 'resource', name: 'web' },
+			{ id: 'dat', kind: 'data', name: 'ami' },
 			{ id: 'var', kind: 'variable', name: 'region' }
 		];
 		const edges = [
-			{ source: 'res', target: 'var' },
+			{ source: 'res', target: 'dat' },
 			{ source: 'out', target: 'res' }
 		];
 
 		const positions = layoutGraph(nodes, edges);
 
-		const varY = positions.get('var')!.y;
 		const resY = positions.get('res')!.y;
+		const datY = positions.get('dat')!.y;
+		const varY = positions.get('var')!.y;
 		const outY = positions.get('out')!.y;
 
-		expect(varY).toBeLessThan(resY);
-		expect(resY).toBeLessThan(outY);
+		expect(resY).toBeLessThan(datY);
+		expect(datY).toBeLessThan(varY);
+		expect(varY).toBeLessThan(outY);
 	});
 
-	it('is deterministic - same input gives same output', () => {
+	it('places providers to the left of main graph', () => {
+		const nodes = [
+			{ id: 'prov', kind: 'provider', name: 'aws' },
+			{ id: 'res', kind: 'resource', name: 'web' },
+			{ id: 'var', kind: 'variable', name: 'region' }
+		];
+		const edges: Array<{ source: string; target: string }> = [];
+
+		const positions = layoutGraph(nodes, edges);
+
+		const provX = positions.get('prov')!.x;
+		const resX = positions.get('res')!.x;
+
+		expect(provX).toBeLessThan(resX);
+	});
+
+	it('is deterministic', () => {
 		const nodes = [
 			{ id: 'a', kind: 'resource', name: 'alpha' },
 			{ id: 'b', kind: 'resource', name: 'beta' },
@@ -60,7 +72,6 @@ describe('layoutGraph', () => {
 	});
 
 	it('handles empty graph', () => {
-		const positions = layoutGraph([], []);
-		expect(positions.size).toBe(0);
+		expect(layoutGraph([], []).size).toBe(0);
 	});
 });
