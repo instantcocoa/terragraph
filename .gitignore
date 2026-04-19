@@ -29,6 +29,7 @@ storybook-static
 
 *.png
 !terragraph.png
+!static/*.png
 
 CLAUDE.md
 PROMPT.md

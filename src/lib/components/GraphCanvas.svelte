@@ -22,11 +22,32 @@
 	// Detect compound groups
 	const groupInfo = $derived(detectGroups(workspace.nodes, workspace.edges));
 
-	// Start with sync layout, then upgrade to ELK async
+	// Map: primary node ID -> its grouped children
+	const childrenByPrimary = $derived.by(() => {
+		const m = new Map<string, Array<{ id: string; label: string; kind: import('$lib/types').NodeKind; resourceType?: string }>>();
+		for (const group of groupInfo.groups) {
+			const children = group.members
+				.filter((member) => member.id !== group.primary.id)
+				.map((member) => ({
+					id: member.id,
+					label: member.name,
+					kind: member.kind,
+					resourceType: member.resourceType
+				}));
+			m.set(group.primary.id, children);
+		}
+		return m;
+	});
+
+	// Layout only non-grouped nodes (grouped children are rendered inside their parent)
+	const layoutNodes = $derived(
+		workspace.nodes.filter((n) => !groupInfo.groupedIds.has(n.id))
+	);
+
 	let positions = $state(new Map<string, { x: number; y: number }>());
 
 	$effect(() => {
-		const nodes = workspace.nodes;
+		const nodes = layoutNodes;
 		const edges = workspace.edges;
 		if (nodes.length === 0) { positions = new Map(); return; }
 		positions = layoutGraph(nodes, edges);
@@ -40,57 +61,17 @@
 		new Set(workspace.connectableNodes.map((n) => n.id))
 	);
 
-	// Build flow nodes: group nodes become parent containers, members become children
+	// Only render non-grouped nodes (grouped children are embedded in their parent's TerraNode)
 	let flowNodes = $derived.by(() => {
-		const result: Node[] = [];
-		const childOf = new Map<string, string>(); // nodeId -> groupId
-
-		// Map grouped children to their group
-		for (const group of groupInfo.groups) {
-			for (const member of group.members) {
-				if (member.id !== group.primary.id) {
-					childOf.set(member.id, group.id);
-				}
-			}
-
-			// Add group container node
-			const pos = positions.get(group.primary.id) ?? { x: 0, y: 0 };
-			const memberCount = group.members.length;
-			result.push({
-				id: group.id,
-				type: 'group',
-				position: { x: pos.x - 15, y: pos.y - 15 },
-				style: `width: ${220 + 10}px; height: ${72 * memberCount + 20 * (memberCount - 1) + 30}px; background: rgba(255,255,255,0.02); border: 1px solid var(--border, #2f3146); border-radius: 10px;`,
-				data: {}
-			});
-		}
-
-		for (const node of workspace.nodes) {
+		return layoutNodes.map((node) => {
+			const pos = positions.get(node.id) ?? { x: 0, y: 0 };
 			const planChange = workspace.planChangeMap.get(node.address);
-			const isGroupChild = childOf.has(node.id);
-			const isGroupPrimary = groupInfo.groups.some((g) => g.primary.id === node.id);
-
-			let position: { x: number; y: number };
-
-			if (isGroupChild) {
-				// Position relative to parent group
-				const groupId = childOf.get(node.id)!;
-				const group = groupInfo.groups.find((g) => g.id === groupId)!;
-				const childIndex = group.members.findIndex((m) => m.id === node.id);
-				// Stack children below the primary
-				position = { x: 15, y: 15 + childIndex * (72 + 20) };
-			} else if (isGroupPrimary) {
-				// Primary is first child of the group container
-				position = { x: 15, y: 15 };
-			} else {
-				const pos = positions.get(node.id) ?? { x: 0, y: 0 };
-				position = pos;
-			}
+			const children = childrenByPrimary.get(node.id);
 
 			const flowNode: Node = {
 				id: node.id,
 				type: 'terra',
-				position,
+				position: { x: pos.x, y: pos.y },
 				data: {
 					label: node.name,
 					kind: node.kind,
@@ -104,23 +85,14 @@
 						(d) => d.range?.file === node.source.file &&
 							d.range.startLine >= node.source.startLine &&
 							d.range.endLine <= node.source.endLine
-					).length
+					).length,
+					children: children,
+					onChildClick: (id: string) => workspace.selectNode(id)
 				}
 			};
 
-			// Set parent for grouped nodes
-			if (isGroupChild || isGroupPrimary) {
-				const groupId = isGroupChild
-					? childOf.get(node.id)!
-					: groupInfo.groups.find((g) => g.primary.id === node.id)!.id;
-				flowNode.parentId = groupId;
-				flowNode.expandParent = true;
-			}
-
-			result.push(flowNode);
-		}
-
-		return result;
+			return flowNode;
+		});
 	});
 
 	// Tier map for edge direction correction
@@ -140,7 +112,9 @@
 	};
 
 	let flowEdges = $derived<Edge[]>(
-		workspace.edges.map((edge) => {
+		workspace.edges
+		.filter((edge) => !groupInfo.groupedIds.has(edge.source) && !groupInfo.groupedIds.has(edge.target))
+		.map((edge) => {
 			const sourceKind = nodeKindMap.get(edge.source) ?? '';
 			const targetKind = nodeKindMap.get(edge.target) ?? '';
 			const sourceTier = KIND_TIER[sourceKind] ?? 2;
