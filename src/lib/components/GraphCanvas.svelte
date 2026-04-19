@@ -13,26 +13,84 @@
 	import FitToNode from './FitToNode.svelte';
 	import { workspace } from '$lib/stores/workspace.svelte';
 	import { theme } from '$lib/stores/theme.svelte';
-	import { layoutGraph } from '$lib/layout';
+	import { layoutGraph, layoutGraphAsync } from '$lib/layout';
+	import { detectGroups } from '$lib/groups';
 	import type { PlanAction } from '$lib/types';
 
 	const nodeTypes = { terra: TerraNode };
 
-	const positions = $derived(layoutGraph(workspace.nodes, workspace.edges));
+	// Detect compound groups
+	const groupInfo = $derived(detectGroups(workspace.nodes, workspace.edges));
+
+	// Start with sync layout, then upgrade to ELK async
+	let positions = $state(new Map<string, { x: number; y: number }>());
+
+	$effect(() => {
+		const nodes = workspace.nodes;
+		const edges = workspace.edges;
+		if (nodes.length === 0) { positions = new Map(); return; }
+		positions = layoutGraph(nodes, edges);
+
+		layoutGraphAsync(nodes, edges).then((p) => {
+			if (p.size > 0) positions = p;
+		});
+	});
 
 	const connectableIds = $derived(
 		new Set(workspace.connectableNodes.map((n) => n.id))
 	);
 
-	let flowNodes = $derived<Node[]>(
-		workspace.nodes.map((node) => {
-			const pos = positions.get(node.id) ?? { x: 0, y: 0 };
-			const planChange = workspace.planChangeMap.get(node.address);
+	// Build flow nodes: group nodes become parent containers, members become children
+	let flowNodes = $derived.by(() => {
+		const result: Node[] = [];
+		const childOf = new Map<string, string>(); // nodeId -> groupId
 
-			return {
+		// Map grouped children to their group
+		for (const group of groupInfo.groups) {
+			for (const member of group.members) {
+				if (member.id !== group.primary.id) {
+					childOf.set(member.id, group.id);
+				}
+			}
+
+			// Add group container node
+			const pos = positions.get(group.primary.id) ?? { x: 0, y: 0 };
+			const memberCount = group.members.length;
+			result.push({
+				id: group.id,
+				type: 'group',
+				position: { x: pos.x - 15, y: pos.y - 15 },
+				style: `width: ${220 + 10}px; height: ${72 * memberCount + 20 * (memberCount - 1) + 30}px; background: rgba(255,255,255,0.02); border: 1px solid var(--border, #2f3146); border-radius: 10px;`,
+				data: {}
+			});
+		}
+
+		for (const node of workspace.nodes) {
+			const planChange = workspace.planChangeMap.get(node.address);
+			const isGroupChild = childOf.has(node.id);
+			const isGroupPrimary = groupInfo.groups.some((g) => g.primary.id === node.id);
+
+			let position: { x: number; y: number };
+
+			if (isGroupChild) {
+				// Position relative to parent group
+				const groupId = childOf.get(node.id)!;
+				const group = groupInfo.groups.find((g) => g.id === groupId)!;
+				const childIndex = group.members.findIndex((m) => m.id === node.id);
+				// Stack children below the primary
+				position = { x: 15, y: 15 + childIndex * (72 + 20) };
+			} else if (isGroupPrimary) {
+				// Primary is first child of the group container
+				position = { x: 15, y: 15 };
+			} else {
+				const pos = positions.get(node.id) ?? { x: 0, y: 0 };
+				position = pos;
+			}
+
+			const flowNode: Node = {
 				id: node.id,
 				type: 'terra',
-				position: { x: pos.x, y: pos.y },
+				position,
 				data: {
 					label: node.name,
 					kind: node.kind,
@@ -49,10 +107,26 @@
 					).length
 				}
 			};
-		})
-	);
 
-	// Color edges by the source node's kind
+			// Set parent for grouped nodes
+			if (isGroupChild || isGroupPrimary) {
+				const groupId = isGroupChild
+					? childOf.get(node.id)!
+					: groupInfo.groups.find((g) => g.primary.id === node.id)!.id;
+				flowNode.parentId = groupId;
+				flowNode.expandParent = true;
+			}
+
+			result.push(flowNode);
+		}
+
+		return result;
+	});
+
+	// Tier map for edge direction correction
+	const KIND_TIER: Record<string, number> = {
+		resource: 0, module: 0, data: 1, local: 2, variable: 3, output: 4
+	};
 	const nodeKindMap = $derived(new Map(workspace.nodes.map((n) => [n.id, n.kind])));
 
 	const EDGE_COLORS: Record<string, string> = {
@@ -68,13 +142,24 @@
 	let flowEdges = $derived<Edge[]>(
 		workspace.edges.map((edge) => {
 			const sourceKind = nodeKindMap.get(edge.source) ?? '';
-			const color = EDGE_COLORS[sourceKind] ?? '#52525b60';
+			const targetKind = nodeKindMap.get(edge.target) ?? '';
+			const sourceTier = KIND_TIER[sourceKind] ?? 2;
+			const targetTier = KIND_TIER[targetKind] ?? 2;
+
+			// Always make edges flow downward visually (from higher tier to lower)
+			const goesUp = sourceTier > targetTier;
+			const visualSource = goesUp ? edge.target : edge.source;
+			const visualTarget = goesUp ? edge.source : edge.target;
+
+			// Color by the upstream (top) node
+			const upstreamKind = goesUp ? targetKind : sourceKind;
+			const color = EDGE_COLORS[upstreamKind] ?? '#52525b60';
 
 			if (edge.kind === 'depends_on') {
 				return {
 					id: edge.id,
-					source: edge.source,
-					target: edge.target,
+					source: visualSource,
+					target: visualTarget,
 					type: 'smoothstep',
 					animated: false,
 					style: `stroke: #f59e0b; stroke-width: 1.5; stroke-dasharray: 6 4;`
@@ -83,8 +168,8 @@
 
 			return {
 				id: edge.id,
-				source: edge.source,
-				target: edge.target,
+				source: visualSource,
+				target: visualTarget,
 				type: 'smoothstep',
 				animated: false,
 				style: `stroke: ${color}; stroke-width: 1.5;`
