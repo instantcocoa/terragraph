@@ -3,63 +3,54 @@ import type { GraphNode, GraphEdge } from './types';
 export interface NodeGroup {
 	id: string;
 	label: string;
-	primary: GraphNode; // The main resource in the group
-	members: GraphNode[]; // All nodes in the group (including primary)
+	primary: GraphNode;
+	members: GraphNode[];
 }
 
 /**
- * Detect tightly-coupled resource groups.
+ * Detect tightly-coupled resource groups for compound node display.
  *
- * A resource is grouped with its "parent" if:
- * - It's only referenced by ONE other resource (exclusive dependency)
- * - It's in a closely related tier (resource↔resource, resource↔data)
- * - It's not a variable, output, local, or provider (those stay standalone)
- *
- * Returns groups and the set of node IDs that are grouped (non-primary).
+ * A resource gets nested inside another if:
+ * - Only ONE resource/data/module references it (ignoring outputs, variables, locals)
+ * - It's itself a resource, data source, or module
+ * - It doesn't have too many outgoing connections (not a hub)
  */
 export function detectGroups(
 	nodes: GraphNode[],
 	edges: GraphEdge[]
 ): { groups: NodeGroup[]; groupedIds: Set<string> } {
 	const groupableKinds = new Set(['resource', 'data', 'module']);
-
-	// Count how many resources reference each node (incoming reference count)
-	const incomingFrom = new Map<string, Set<string>>();
-	for (const edge of edges) {
-		if (!incomingFrom.has(edge.target)) incomingFrom.set(edge.target, new Set());
-		incomingFrom.get(edge.target)!.add(edge.source);
-	}
-
-	// Count outgoing references
-	const outgoingTo = new Map<string, Set<string>>();
-	for (const edge of edges) {
-		if (!outgoingTo.has(edge.source)) outgoingTo.set(edge.source, new Set());
-		outgoingTo.get(edge.source)!.add(edge.target);
-	}
-
 	const nodeMap = new Map(nodes.map((n) => [n.id, n]));
+
+	// Only count incoming references FROM resources/data/modules (not outputs/vars)
+	const resourceIncoming = new Map<string, Set<string>>();
+	for (const edge of edges) {
+		const sourceNode = nodeMap.get(edge.source);
+		if (!sourceNode || !groupableKinds.has(sourceNode.kind)) continue;
+		if (!resourceIncoming.has(edge.target)) resourceIncoming.set(edge.target, new Set());
+		resourceIncoming.get(edge.target)!.add(edge.source);
+	}
+
 	const groups: NodeGroup[] = [];
 	const groupedIds = new Set<string>();
 
-	// Find resources that are exclusively used by one other resource
 	for (const node of nodes) {
 		if (!groupableKinds.has(node.kind)) continue;
 		if (groupedIds.has(node.id)) continue;
 
-		const refs = incomingFrom.get(node.id);
-		if (!refs || refs.size !== 1) continue;
+		// Check: is this node referenced by exactly ONE resource/data/module?
+		const resourceRefs = resourceIncoming.get(node.id);
+		if (!resourceRefs || resourceRefs.size !== 1) continue;
 
-		const parentId = [...refs][0];
+		const parentId = [...resourceRefs][0];
 		const parent = nodeMap.get(parentId);
 		if (!parent || !groupableKinds.has(parent.kind)) continue;
 		if (groupedIds.has(parentId)) continue;
 
-		// Don't group if the child also has many outgoing refs (it's a hub)
-		const childOutgoing = outgoingTo.get(node.id);
-		if (childOutgoing && childOutgoing.size > 2) continue;
+		// Don't nest the parent inside itself
+		if (parentId === node.id) continue;
 
-		// This node is exclusively owned by parent - group it
-		// Find or create the parent's group
+		// Find or create group
 		let group = groups.find((g) => g.primary.id === parentId);
 		if (!group) {
 			group = {
@@ -70,14 +61,17 @@ export function detectGroups(
 			};
 			groups.push(group);
 		}
+
+		// Limit group size to keep nodes readable
+		if (group.members.length >= 4) continue;
+
 		group.members.push(node);
 		groupedIds.add(node.id);
 	}
 
-	// Only keep groups with 2+ members (primary + at least one child)
+	// Only keep groups with actual children
 	const validGroups = groups.filter((g) => g.members.length >= 2);
 
-	// Remove ungrouped primary IDs from groupedIds
 	groupedIds.clear();
 	for (const g of validGroups) {
 		for (const m of g.members) {

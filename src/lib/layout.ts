@@ -1,42 +1,40 @@
-import ELK from 'elkjs/lib/elk.bundled.js';
+import type { GraphNode, GraphEdge, NodeKind } from './types';
+import { detectGroups } from './groups';
 
-const NODE_WIDTH = 200;
-const NODE_HEIGHT = 72;
+const NODE_WIDTH = 2.8; // inches for graphviz
+const NODE_HEIGHT = 1.0;
+const DPI = 72;
 
-const KIND_LAYER: Record<string, number> = {
-	resource: 0,
-	module: 0,
-	data: 1,
-	local: 2,
-	variable: 3,
-	output: 4
+const KIND_TIER: Record<string, number> = {
+	resource: 0, module: 0, data: 1, local: 2, variable: 3, output: 4
 };
-
 const LEFT_COLUMN = new Set(['provider', 'terraform']);
 
-let elk: InstanceType<typeof ELK> | null = null;
-function getELK(): InstanceType<typeof ELK> {
-	if (!elk) elk = new ELK();
-	return elk;
+// Viz.js instance (lazy loaded)
+let vizPromise: Promise<any> | null = null;
+
+async function getViz() {
+	if (!vizPromise) {
+		vizPromise = import('@viz-js/viz').then((m) => m.instance());
+	}
+	return vizPromise;
 }
 
 /**
- * Synchronous fallback layout: simple tier-based grid.
+ * Synchronous fallback: simple tier grid.
  */
 export function layoutGraph(
 	nodes: Array<{ id: string; kind?: string; name?: string }>,
-	edges: Array<{ source: string; target: string }>
+	_edges: Array<{ source: string; target: string }>
 ): Map<string, { x: number; y: number }> {
-	void edges; // used by async version
 	if (nodes.length === 0) return new Map();
-
 	const positions = new Map<string, { x: number; y: number }>();
 	const mainNodes = nodes.filter((n) => !LEFT_COLUMN.has(n.kind ?? ''));
 	const leftNodes = nodes.filter((n) => LEFT_COLUMN.has(n.kind ?? ''));
 
 	const tiers = new Map<number, typeof mainNodes>();
 	for (const node of mainNodes) {
-		const t = KIND_LAYER[node.kind ?? ''] ?? 2;
+		const t = KIND_TIER[node.kind ?? ''] ?? 2;
 		if (!tiers.has(t)) tiers.set(t, []);
 		tiers.get(t)!.push(node);
 	}
@@ -45,31 +43,26 @@ export function layoutGraph(
 	for (const tierKey of [...tiers.keys()].sort()) {
 		const tierNodes = tiers.get(tierKey)!;
 		tierNodes.sort((a, b) => (a.name ?? a.id).localeCompare(b.name ?? b.id));
-		const totalWidth = tierNodes.length * (NODE_WIDTH + 35);
+		const totalWidth = tierNodes.length * 250;
 		const startX = -totalWidth / 2;
 		for (let i = 0; i < tierNodes.length; i++) {
-			positions.set(tierNodes[i].id, { x: startX + i * (NODE_WIDTH + 35), y });
+			positions.set(tierNodes[i].id, { x: startX + i * 250, y });
 		}
-		y += NODE_HEIGHT + 90;
+		y += 160;
 	}
 
 	let minX = Infinity;
 	for (const p of positions.values()) minX = Math.min(minX, p.x);
 	if (!isFinite(minX)) minX = 0;
 	for (let i = 0; i < leftNodes.length; i++) {
-		positions.set(leftNodes[i].id, {
-			x: minX - NODE_WIDTH - 80,
-			y: i * (NODE_HEIGHT + 20)
-		});
+		positions.set(leftNodes[i].id, { x: minX - 300, y: i * 100 });
 	}
-
 	return positions;
 }
 
 /**
- * Async ELK layout - returns a promise with optimized positions.
- * Uses ELK layered algorithm with orthogonal edge routing and
- * crossing minimization.
+ * Async Graphviz layout with subgraph clusters for grouped resources.
+ * Uses the `dot` engine for hierarchical layout.
  */
 export async function layoutGraphAsync(
 	nodes: Array<{ id: string; kind?: string; name?: string }>,
@@ -85,80 +78,145 @@ export async function layoutGraphAsync(
 
 	const nodeTier = new Map<string, number>();
 	for (const node of mainNodes) {
-		nodeTier.set(node.id, KIND_LAYER[node.kind ?? ''] ?? 2);
+		nodeTier.set(node.id, KIND_TIER[node.kind ?? ''] ?? 2);
 	}
+
+	// Detect groups for clustering
+	const fullNodes = nodes as GraphNode[];
+	const fullEdges = edges as GraphEdge[];
+	const { groups, groupedIds } = detectGroups(fullNodes, fullEdges);
 
 	const mainIds = new Set(mainNodes.map((n) => n.id));
 
-	const sorted = [...mainNodes].sort((a, b) => {
-		const tA = KIND_LAYER[a.kind ?? ''] ?? 2;
-		const tB = KIND_LAYER[b.kind ?? ''] ?? 2;
-		if (tA !== tB) return tA - tB;
-		return (a.name ?? a.id).localeCompare(b.name ?? b.id);
-	});
+	// Sanitize ID for Graphviz (replace dots with underscores)
+	const gvId = (id: string) => id.replace(/[.\-]/g, '_');
 
-	const elkEdges = edges
-		.filter((e) => mainIds.has(e.source) && mainIds.has(e.target))
-		.map((e, i) => {
-			const srcTier = nodeTier.get(e.source) ?? 2;
-			const tgtTier = nodeTier.get(e.target) ?? 2;
-			if (srcTier <= tgtTier) {
-				return { id: `e${i}`, sources: [e.source], targets: [e.target] };
-			} else {
-				return { id: `e${i}`, sources: [e.target], targets: [e.source] };
-			}
-		});
+	// Build DOT string
+	let dot = 'digraph {\n';
+	dot += '  rankdir=TB;\n';
+	dot += '  splines=ortho;\n';
+	dot += '  nodesep=0.5;\n';
+	dot += '  ranksep=1.0;\n';
+	dot += `  node [shape=box, width=${NODE_WIDTH}, height=${NODE_HEIGHT}, fixedsize=true];\n`;
+	dot += '  newrank=true;\n';
 
-	const elkGraph = {
-		id: 'root',
-		layoutOptions: {
-			'elk.algorithm': 'layered',
-			'elk.direction': 'DOWN',
-			'elk.layered.spacing.nodeNodeBetweenLayers': '90',
-			'elk.spacing.nodeNode': '35',
-			'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
-			'elk.layered.nodePlacement.strategy': 'NETWORK_SIMPLEX',
-			'elk.layered.considerModelOrder.strategy': 'NODES_AND_EDGES',
-			'elk.edgeRouting': 'ORTHOGONAL',
-			'elk.layered.spacing.edgeNodeBetweenLayers': '20',
-			'elk.layered.spacing.edgeEdgeBetweenLayers': '15'
-		},
-		children: sorted.map((node) => ({
-			id: node.id,
-			width: NODE_WIDTH,
-			height: NODE_HEIGHT
-		})),
-		edges: elkEdges
-	};
+	// Rank constraints by tier
+	const tiers = new Map<number, string[]>();
+	for (const node of mainNodes) {
+		if (groupedIds.has(node.id)) continue;
+		const t = nodeTier.get(node.id) ?? 2;
+		if (!tiers.has(t)) tiers.set(t, []);
+		tiers.get(t)!.push(node.id);
+	}
+
+	for (const [, tierNodeIds] of tiers) {
+		dot += `  { rank=same; ${tierNodeIds.map(gvId).join('; ')}; }\n`;
+	}
+
+	// Add cluster subgraphs for grouped resources
+	for (const group of groups) {
+		dot += `  subgraph cluster_${gvId(group.primary.id)} {\n`;
+		dot += `    style=rounded;\n`;
+		dot += `    color="#2f3146";\n`;
+		dot += `    bgcolor="#1a1b2610";\n`;
+		for (const member of group.members) {
+			dot += `    ${gvId(member.id)} [label="${member.name}"];\n`;
+		}
+		dot += `  }\n`;
+	}
+
+	// Add standalone nodes (not in any group)
+	for (const node of mainNodes) {
+		if (groupedIds.has(node.id)) continue;
+		if (groups.some((g) => g.primary.id === node.id)) continue;
+		dot += `  ${gvId(node.id)} [label="${node.name}"];\n`;
+	}
+
+	// Add edges - always downward in tier order
+	for (const edge of edges) {
+		if (!mainIds.has(edge.source) || !mainIds.has(edge.target)) continue;
+		const srcTier = nodeTier.get(edge.source) ?? 2;
+		const tgtTier = nodeTier.get(edge.target) ?? 2;
+
+		if (srcTier <= tgtTier) {
+			dot += `  ${gvId(edge.source)} -> ${gvId(edge.target)};\n`;
+		} else {
+			dot += `  ${gvId(edge.target)} -> ${gvId(edge.source)};\n`;
+		}
+	}
+
+	// Invisible tier chain edges
+	const tierKeys = [...tiers.keys()].sort();
+	for (let i = 0; i < tierKeys.length - 1; i++) {
+		const cur = tiers.get(tierKeys[i])!;
+		const next = tiers.get(tierKeys[i + 1])!;
+		dot += `  ${gvId(cur[0])} -> ${gvId(next[0])} [style=invis, weight=100];\n`;
+	}
+
+	dot += '}\n';
 
 	try {
-		const result = await getELK().layout(elkGraph);
-		if (result.children) {
-			for (const child of result.children) {
-				positions.set(child.id, { x: child.x ?? 0, y: child.y ?? 0 });
+		const viz = await getViz();
+		const result = viz.renderJSON(dot);
+
+		// Parse JSON output - Graphviz JSON format has objects array
+		if (result && result.objects) {
+			for (const obj of result.objects) {
+				if (obj.name && obj.pos) {
+					// pos is "x,y" in points
+					const [xStr, yStr] = obj.pos.split(',');
+					const x = parseFloat(xStr);
+					const y = parseFloat(yStr);
+
+					// Find the original node ID from the sanitized name
+					const originalId = mainNodes.find((n) => gvId(n.id) === obj.name)?.id;
+					if (originalId) {
+						positions.set(originalId, { x, y: -y }); // Graphviz Y is inverted
+					}
+				}
 			}
 		}
-	} catch {
+
+		// If JSON parsing didn't work well, try plain format
+		if (positions.size === 0) {
+			const plainResult = viz.render(dot, { format: 'plain' });
+			if (plainResult.status === 'success') {
+				const lines = plainResult.output.split('\n');
+				for (const line of lines) {
+					if (line.startsWith('node ')) {
+						const parts = line.split(/\s+/);
+						const name = parts[1];
+						const x = parseFloat(parts[2]) * DPI;
+						const y = -parseFloat(parts[3]) * DPI; // Invert Y
+						const originalId = mainNodes.find((n) => gvId(n.id) === name)?.id;
+						if (originalId) {
+							positions.set(originalId, { x, y });
+						}
+					}
+				}
+			}
+		}
+	} catch (e) {
+		console.error('Graphviz layout failed:', e);
 		return layoutGraph(nodes, edges);
 	}
 
 	// Left column
-	if (leftNodes.length > 0) {
+	if (leftNodes.length > 0 && positions.size > 0) {
 		let minX = Infinity;
 		let firstY = 0;
 		for (const pos of positions.values()) {
 			if (pos.x < minX) { minX = pos.x; firstY = pos.y; }
 		}
-		if (!isFinite(minX)) { minX = 0; firstY = 0; }
 
-		const leftX = minX - NODE_WIDTH - 80;
+		const leftX = minX - NODE_WIDTH * DPI - 60;
 		const sortedLeft = [...leftNodes].sort((a, b) =>
 			(a.name ?? a.id).localeCompare(b.name ?? b.id)
 		);
 		for (let i = 0; i < sortedLeft.length; i++) {
 			positions.set(sortedLeft[i].id, {
 				x: leftX,
-				y: firstY + i * (NODE_HEIGHT + 20)
+				y: firstY + i * 90
 			});
 		}
 	}

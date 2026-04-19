@@ -57,6 +57,7 @@
 	},
 	"dependencies": {
 		"@dagrejs/dagre": "^3.0.0",
+		"@viz-js/viz": "^3.26.0",
 		"@xyflow/svelte": "^1.5.2",
 		"elkjs": "^0.11.1",
 		"monaco-editor": "^0.55.1"
