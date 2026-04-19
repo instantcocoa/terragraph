@@ -55,6 +55,7 @@ export interface GraphNode {
 	varType?: string;
 	moduleSource?: string;
 	moduleVersion?: string;
+	children?: GraphNode[];
 }
 
 export interface GraphEdge {

@@ -8,36 +8,40 @@ A visual Terraform graph editor and inspector. Load any Terraform workspace, vis
 
 ```
 terragraph/
-  backend/              # Go API server
-    cmd/server/         # Entry point
+  backend/                  # Go API server
+    cmd/server/             # Entry point
     internal/
-      api/              # HTTP handlers (CORS, routing)
-      graph/            # Graph node/edge extraction from HCL AST
-      parser/           # HCL parsing and patching (hclwrite)
-      terraform/        # Terraform CLI integration (validate, plan)
-  src/                  # SvelteKit frontend
+      api/                  # HTTP handlers (CORS, routing)
+      graph/                # Graph extraction + module expansion
+      history/              # Undo/redo version tracking
+      parser/               # HCL parsing, patching, block ops
+      terraform/            # terraform-exec, schema, plan, LSP
+  src/                      # SvelteKit frontend
     lib/
-      api.ts            # API client
-      layout.ts         # Dagre graph layout
-      types.ts          # TypeScript types matching Go backend
-      stores/           # Reactive state (Svelte 5 runes)
-      components/       # UI components
-        GraphCanvas     # Svelte Flow graph rendering
-        TerraNode       # Custom node component
-        Inspector       # Right panel: attributes, source, plan diff
-        BottomPanel     # Diagnostics and plan summary
-        Sidebar         # File tree, search, kind filters
-        Toolbar         # Workspace path, load/validate/plan actions
-    routes/             # SvelteKit pages
-  examples/             # Example Terraform workspaces
-    simple/             # Single file with vars, locals, resources, outputs
-    multi-file/         # Multi-file with provider, data sources, count
+      api.ts                # API client
+      layout.ts             # Dagre DAG layout with tier ordering
+      types.ts              # TypeScript types
+      stores/
+        workspace.svelte.ts # Core state (Svelte 5 runes)
+        theme.svelte.ts     # Theme state (dark/light/solarized)
+      components/
+        GraphCanvas         # Svelte Flow graph
+        TerraNode           # Custom graph node
+        Inspector           # Right panel: schema-driven attributes
+        HCLEditor           # Monaco editor modal
+        ExpressionEditor    # Structured expression editors
+        ResourcePalette     # Searchable resource type browser
+        BottomPanel         # Diagnostics, plan details
+        Sidebar             # Explorer tree + palette tabs
+        AddBlockDialog      # Add resource/data/variable/output/provider
+        Toolbar             # Actions, undo/redo, theme, validate, plan
+  examples/                 # Example Terraform workspaces
 ```
 
 ## Tech Stack
 
-- **Frontend**: SvelteKit, Svelte 5 (runes), Svelte Flow (@xyflow/svelte), Tailwind CSS, dagre
-- **Backend**: Go, HashiCorp HCL v2 (hclsyntax + hclwrite), Terraform CLI
+- **Frontend**: SvelteKit, Svelte 5, Svelte Flow, Monaco Editor, Tailwind CSS, dagre
+- **Backend**: Go, terraform-exec, terraform-json, HCL v2, terraform-ls (LSP)
 - **Build**: Bun, Vite, Go modules
 - **Testing**: Vitest, Playwright, Go test
 
@@ -45,9 +49,18 @@ terragraph/
 
 ### Prerequisites
 
-- [Bun](https://bun.sh/) (package manager)
+- [Bun](https://bun.sh/)
 - [Go](https://go.dev/) 1.21+
 - [Terraform](https://www.terraform.io/) CLI
+
+### Optional (for LSP features)
+
+```bash
+# Install terraform-ls for live diagnostics and hover
+brew install hashicorp/tap/terraform-ls
+
+# Or download from https://github.com/hashicorp/terraform-ls/releases
+```
 
 ### Install & Run
 
@@ -65,91 +78,85 @@ cd backend && go run ./cmd/server &
 bun run dev
 ```
 
-Or use the combined script:
-
-```bash
-bun run dev:all
-```
-
-Then open http://localhost:5173 and enter a Terraform workspace path.
+Then open http://localhost:5173 and load a Terraform workspace (type a path or click Open).
 
 ## Features
 
-### Working
+### Graph Visualization
+- All Terraform block types as color-coded nodes with dependency edges
+- Deterministic DAG layout: variables at top, resources in middle, outputs at bottom
+- Connected resources cluster together
+- Zoom-to-node when selecting from sidebar
+- Module expansion for local modules (shows internal resources as children)
 
-- **Graph visualization**: All Terraform block types rendered as color-coded nodes with dependency edges
-- **Dagre auto-layout**: Proper top-to-bottom DAG layout
-- **Inspector panel**: Attributes, expressions, references, nested blocks, raw HCL source
-- **Inline editing**: Edit simple attribute values in the inspector, patches HCL surgically via hclwrite
-- **Sidebar explorer**: File list, node list with search and kind filters
-- **Terraform validate**: Run validation and display diagnostics with severity, location, and detail
-- **Plan support**: Run `terraform plan`, display plan summary and per-resource action badges (create/update/delete/replace)
-- **Plan diff**: Inspector shows before/after field diffs with unknown-after-apply markers
-- **Keyboard shortcuts**: Escape to deselect, Cmd+B to toggle sidebar
-- **Dark theme**: Professional dark UI
+### Inspector & Editing
+- Schema-driven inspector showing all possible attributes per resource type
+- Required, optional, and computed fields clearly separated
+- Inline editing with type-aware editors (text, bool toggle, number, reference links)
+- Structured expression editors for strings, references, functions, conditionals
+- One-click navigation between references ("Used By" / clickable ref tags)
+- Full HCL editor modal with Monaco (syntax highlighting, line numbers)
+- Rename blocks with automatic cross-file reference updates
+- Add/remove nested blocks, remove attributes
+
+### Workspace Operations
+- Add resources, data sources, variables, outputs, and providers
+- Resource palette with searchable provider-grouped type browser
+- Connected resource scaffolding (e.g. adding aws_instance suggests VPC, subnet, AMI)
+- Required fields auto-populated with sensible defaults
+- Terraform validate with clear pass/fail feedback
+- Terraform plan with expandable per-resource diffs (create/update/delete details)
+- Data source evaluation (query live provider values)
+- Undo/redo version history (Cmd+Z / Cmd+Shift+Z)
+- Native folder picker (Open button)
+
+### UI
+- Three themes: Tokyo Night (dark), Clean Light, Solarized Dark
+- Resizable panels (drag edges of sidebar, inspector, bottom panel)
+- Collapsible bottom panel with status badges
+- Keyboard shortcuts (Cmd+Z undo, Cmd+Shift+Z redo, Cmd+B sidebar, Escape deselect)
+
+### LSP Integration
+- Connects to terraform-ls for live diagnostics and hover info
+- Auto-starts when terraform-ls is available
+- Diagnostics fed to Monaco editor markers
 
 ### Supported Terraform Constructs
-
-- Resources, data sources, modules, providers, variables, locals, outputs, terraform blocks
-- Expression references (var.x, local.y, resource.type.name.attr)
-- depends_on edges
-- Nested blocks (ingress/egress rules, filters, etc.)
-- count and for_each (parsed and displayed)
-- Template strings and function calls (shown as expressions)
-
-### Limitations
-
-- No live LSP integration yet (validates via Terraform CLI)
-- No Monaco editor panel yet (raw HCL shown in inspector Source tab)
-- No visual resource creation palette yet
-- Advanced expressions shown as raw text, not structured editors
-- No undo/redo for patches
-- Plan requires `terraform init` to have been run in the workspace
-- No module expansion (shows module call, not internal resources)
+- Resources, data sources, modules, providers, variables, locals, outputs
+- Expression references, depends_on, nested blocks
+- count, for_each, template strings, function calls
+- Local module expansion
 
 ## Development
 
 ```bash
-# Type check
-bun run check
-
-# Lint
-bun run lint
-
-# Format
-bun run format
-
-# Frontend tests
-bun run test:unit
-
-# E2E tests
-bun run test:e2e
-
-# Backend tests
-cd backend && go test ./...
-
-# Backend build
-cd backend && go build ./...
+bun run check          # Type check
+bun run build          # Production build
+bun run test:unit      # Frontend unit tests
+bun run test:e2e       # Playwright E2E tests
+cd backend && go test ./...   # Backend tests
+cd backend && go build ./...  # Backend build
 ```
 
-## API Endpoints
+## API
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/health` | Health check |
-| POST | `/api/workspace/load` | Parse workspace and return graph JSON |
+| POST | `/api/workspace/load` | Parse workspace, return graph |
 | POST | `/api/workspace/validate` | Run terraform validate |
 | POST | `/api/workspace/plan` | Run terraform plan |
-| GET | `/api/workspace/file?path=` | Read a file |
-| POST | `/api/workspace/patch` | Patch a single attribute in HCL |
-
-## Next Steps
-
-1. Monaco editor panel with HCL syntax highlighting
-2. Terraform LSP integration for completions and hover
-3. Visual resource creation palette
-4. Undo/redo for edits
-5. Module expansion
-6. Provider schema-driven inspector forms
-7. Layout persistence
-8. Advanced expression editor
+| POST | `/api/workspace/patch` | Patch attribute in HCL |
+| POST | `/api/workspace/add-block` | Add resource/data/variable/output |
+| POST | `/api/workspace/remove-block` | Remove a block |
+| POST | `/api/workspace/add-provider` | Add provider + terraform block |
+| POST | `/api/workspace/rename-block` | Rename with ref updates |
+| POST | `/api/workspace/schema` | Get provider schemas |
+| POST | `/api/workspace/scaffold` | Get resource dependencies |
+| POST | `/api/workspace/eval-data` | Evaluate data source |
+| POST | `/api/workspace/undo` | Undo last change |
+| POST | `/api/workspace/redo` | Redo last undo |
+| POST | `/api/workspace/write-file` | Write file content |
+| GET | `/api/lsp/status` | Check terraform-ls availability |
+| POST | `/api/lsp/diagnostics` | Get LSP diagnostics for file |
+| POST | `/api/lsp/hover` | Get hover info at position |

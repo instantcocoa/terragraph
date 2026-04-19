@@ -2,9 +2,11 @@
 	import { workspace } from '$lib/stores/workspace.svelte';
 	import { NODE_KIND_CONFIG } from '$lib/types';
 	import type { NodeKind, GraphNode } from '$lib/types';
+	import ResourcePalette from './ResourcePalette.svelte';
 
 	let search = $state('');
 	let collapsedGroups = $state<Set<string>>(new Set());
+	let sidebarTab = $state<'explorer' | 'palette'>('explorer');
 
 	// Hierarchy order: top-to-bottom dependency flow
 	const KIND_ORDER: NodeKind[] = [
@@ -70,14 +72,21 @@
 </script>
 
 <div class="sidebar">
-	<div class="sidebar-header">
-		<h3>Explorer</h3>
-		{#if workspace.nodes.length > 0}
-			<span class="node-count">{workspace.nodes.length}</span>
-		{/if}
+	<div class="sidebar-tabs">
+		<button class:active={sidebarTab === 'explorer'} onclick={() => (sidebarTab = 'explorer')}>
+			Explorer
+			{#if workspace.nodes.length > 0}
+				<span class="tab-count">{workspace.nodes.length}</span>
+			{/if}
+		</button>
+		<button class:active={sidebarTab === 'palette'} onclick={() => (sidebarTab = 'palette')}>
+			Palette
+		</button>
 	</div>
 
-	{#if workspace.path}
+	{#if sidebarTab === 'palette'}
+		<ResourcePalette />
+	{:else if workspace.path}
 		<div class="search-box">
 			<input
 				type="text"
@@ -159,8 +168,44 @@
 <style>
 	.sidebar {
 		height: 100%;
-		overflow-y: auto;
+		overflow: hidden;
+		display: flex;
+		flex-direction: column;
 		font-size: 14px;
+	}
+
+	.sidebar-tabs {
+		display: flex;
+		border-bottom: 1px solid var(--border);
+		flex-shrink: 0;
+	}
+
+	.sidebar-tabs button {
+		flex: 1;
+		padding: 8px 12px;
+		font-size: 13px;
+		border: none;
+		border-bottom: 2px solid transparent;
+		background: none;
+		color: var(--text-muted);
+		cursor: pointer;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 4px;
+	}
+
+	.sidebar-tabs button.active {
+		color: var(--text);
+		border-bottom-color: var(--accent);
+	}
+
+	.tab-count {
+		font-size: 11px;
+		padding: 0 5px;
+		border-radius: 8px;
+		background: rgba(255, 255, 255, 0.06);
+		color: var(--text-subtle);
 	}
 
 	.sidebar-header {

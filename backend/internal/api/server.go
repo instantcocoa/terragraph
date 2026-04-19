@@ -55,6 +55,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/workspace/add-provider", s.handleAddProvider)
 	s.mux.HandleFunc("POST /api/workspace/write-file", s.handleWriteFile)
 	s.mux.HandleFunc("POST /api/pick-folder", s.handlePickFolder)
+	s.mux.HandleFunc("GET /api/lsp/status", s.handleLSPStatus)
+	s.mux.HandleFunc("POST /api/lsp/diagnostics", s.handleLSPDiagnostics)
+	s.mux.HandleFunc("POST /api/lsp/hover", s.handleLSPHover)
 }
 
 // Handler returns the HTTP handler with CORS middleware
@@ -116,6 +119,7 @@ func (s *Server) handleLoadWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result := extractor.Build()
+	result.Nodes = graph.ExpandModules(absPath, result.Nodes)
 	result.Diagnostics = append(result.Diagnostics, diags...)
 	result.Files = fileNames
 

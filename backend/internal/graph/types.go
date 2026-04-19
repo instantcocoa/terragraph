@@ -59,8 +59,9 @@ type GraphNode struct {
 	Description string      `json:"description,omitempty"`
 	VarType     string      `json:"varType,omitempty"`
 	// For modules
-	ModuleSource  string `json:"moduleSource,omitempty"`
-	ModuleVersion string `json:"moduleVersion,omitempty"`
+	ModuleSource  string      `json:"moduleSource,omitempty"`
+	ModuleVersion string      `json:"moduleVersion,omitempty"`
+	Children      []GraphNode `json:"children,omitempty"`
 }
 
 // EdgeKind represents the type of dependency between nodes

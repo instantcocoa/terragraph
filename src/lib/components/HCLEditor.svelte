@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { workspace } from '$lib/stores/workspace.svelte';
+	import { theme } from '$lib/stores/theme.svelte';
 
 	let {
 		onclose
@@ -16,6 +17,9 @@
 	let dirty = $state(false);
 	let loading = $state(true);
 	let fullFilePath = $state('');
+	let editorContainer: HTMLDivElement | undefined = $state();
+	let editorInstance: import('monaco-editor').editor.IStandaloneCodeEditor | undefined;
+	let monacoModule: typeof import('monaco-editor') | undefined;
 
 	// Load the full file and extract the block
 	$effect(() => {
@@ -34,9 +38,15 @@
 				const lines = data.content.split('\n');
 				const start = node.source.startLine - 1;
 				const end = node.source.endLine;
-				content = lines.slice(start, end).join('\n');
-				originalContent = content;
+				const extracted = lines.slice(start, end).join('\n');
+				content = extracted;
+				originalContent = extracted;
 				loading = false;
+
+				// If editor already exists, update its value
+				if (editorInstance) {
+					editorInstance.setValue(extracted);
+				}
 			})
 			.catch((e) => {
 				error = e.message || 'Failed to load file';
@@ -44,7 +54,233 @@
 				content = node.rawHCL || '';
 				originalContent = content;
 				loading = false;
+
+				if (editorInstance) {
+					editorInstance.setValue(content);
+				}
 			});
+	});
+
+	function getMonacoThemeName(appTheme: string): string {
+		return appTheme === 'light' ? 'hcl-light' : 'hcl-dark';
+	}
+
+	// Switch Monaco theme when app theme changes
+	$effect(() => {
+		const currentTheme = theme.current;
+		if (monacoModule) {
+			monacoModule.editor.setTheme(getMonacoThemeName(currentTheme));
+		}
+	});
+
+	// Initialize Monaco editor
+	$effect(() => {
+		if (!editorContainer || loading) return;
+		if (typeof window === 'undefined') return;
+
+		let disposed = false;
+		let editor: import('monaco-editor').editor.IStandaloneCodeEditor | undefined;
+
+		(async () => {
+			const monaco = await import('monaco-editor');
+			if (disposed) return;
+			monacoModule = monaco;
+
+			// Register HCL language if not already registered
+			const langRegistered = monaco.languages.getLanguages().some((l) => l.id === 'hcl');
+			if (!langRegistered) {
+				monaco.languages.register({ id: 'hcl' });
+				monaco.languages.setMonarchTokensProvider('hcl', {
+					keywords: [
+						'resource', 'data', 'variable', 'output', 'locals', 'module',
+						'provider', 'terraform', 'required_providers', 'for_each', 'count',
+						'depends_on', 'lifecycle', 'dynamic'
+					],
+					typeKeywords: [
+						'string', 'number', 'bool', 'list', 'map', 'set', 'object', 'tuple', 'any'
+					],
+					constants: ['true', 'false', 'null'],
+					tokenizer: {
+						root: [
+							// Line comments
+							[/#.*$/, 'comment'],
+							[/\/\/.*$/, 'comment'],
+							// Block comments
+							[/\/\*/, 'comment', '@comment'],
+							// Strings with interpolation
+							[/"/, 'string', '@string'],
+							// References: var.x, local.x, data.x, module.x, each.x, self.x
+							[/\b(var|local|data|module|each|self)\./, 'variable.reference'],
+							// Functions
+							[/[a-z_]\w*(?=\s*\()/, 'function'],
+							// Keywords
+							[/\b[a-zA-Z_]\w*\b/, {
+								cases: {
+									'@keywords': 'keyword',
+									'@typeKeywords': 'type',
+									'@constants': 'constant',
+									'@default': 'identifier'
+								}
+							}],
+							// Numbers
+							[/\d+(\.\d+)?/, 'number'],
+							// Braces, brackets
+							[/[{}()\[\]]/, 'delimiter.bracket'],
+							// Operators
+							[/[=!<>]=?|&&|\|\|/, 'operator'],
+							// Whitespace
+							[/\s+/, 'white']
+						],
+						comment: [
+							[/[^/*]+/, 'comment'],
+							[/\*\//, 'comment', '@pop'],
+							[/./, 'comment']
+						],
+						string: [
+							[/\$\{/, 'string.interpolation', '@interpolation'],
+							[/[^"$\\]+/, 'string'],
+							[/\\./, 'string.escape'],
+							[/"/, 'string', '@pop']
+						],
+						interpolation: [
+							[/\}/, 'string.interpolation', '@pop'],
+							{ include: 'root' }
+						]
+					}
+				});
+			}
+
+			// Define dark theme (Tokyo Night)
+			monaco.editor.defineTheme('hcl-dark', {
+				base: 'vs-dark',
+				inherit: true,
+				rules: [
+					{ token: 'keyword', foreground: 'bb9af7', fontStyle: 'bold' },
+					{ token: 'type', foreground: '2ac3de' },
+					{ token: 'constant', foreground: 'ff9e64' },
+					{ token: 'comment', foreground: '565f89', fontStyle: 'italic' },
+					{ token: 'string', foreground: '9ece6a' },
+					{ token: 'string.escape', foreground: '89ddff' },
+					{ token: 'string.interpolation', foreground: '7aa2f7' },
+					{ token: 'number', foreground: 'ff9e64' },
+					{ token: 'variable.reference', foreground: '73daca' },
+					{ token: 'function', foreground: '7aa2f7' },
+					{ token: 'operator', foreground: '89ddff' },
+					{ token: 'delimiter.bracket', foreground: 'a9b1d6' },
+					{ token: 'identifier', foreground: 'c0caf5' }
+				],
+				colors: {
+					'editor.background': '#1a1b26',
+					'editor.foreground': '#c0caf5',
+					'editor.lineHighlightBackground': '#1e2030',
+					'editorLineNumber.foreground': '#565f89',
+					'editorLineNumber.activeForeground': '#c0caf5',
+					'editor.selectionBackground': '#33467c55',
+					'editor.inactiveSelectionBackground': '#33467c33',
+					'editorCursor.foreground': '#7aa2f7',
+					'editorWhitespace.foreground': '#2f3146',
+					'editorIndentGuide.background': '#2f314680',
+					'editorIndentGuide.activeBackground': '#565f8980',
+					'scrollbarSlider.background': '#2f314660',
+					'scrollbarSlider.hoverBackground': '#2f314690',
+					'scrollbarSlider.activeBackground': '#2f3146b0'
+				}
+			});
+
+			// Define light theme
+			monaco.editor.defineTheme('hcl-light', {
+				base: 'vs',
+				inherit: true,
+				rules: [
+					{ token: 'keyword', foreground: '7c3aed', fontStyle: 'bold' },
+					{ token: 'type', foreground: '0891b2' },
+					{ token: 'constant', foreground: 'ea580c' },
+					{ token: 'comment', foreground: '94a3b8', fontStyle: 'italic' },
+					{ token: 'string', foreground: '16a34a' },
+					{ token: 'string.escape', foreground: '0284c7' },
+					{ token: 'string.interpolation', foreground: '2563eb' },
+					{ token: 'number', foreground: 'ea580c' },
+					{ token: 'variable.reference', foreground: '0d9488' },
+					{ token: 'function', foreground: '2563eb' },
+					{ token: 'operator', foreground: '0284c7' },
+					{ token: 'delimiter.bracket', foreground: '475569' },
+					{ token: 'identifier', foreground: '1e293b' }
+				],
+				colors: {
+					'editor.background': '#ffffff',
+					'editor.foreground': '#1e293b',
+					'editor.lineHighlightBackground': '#f1f5f9',
+					'editorLineNumber.foreground': '#94a3b8',
+					'editorLineNumber.activeForeground': '#1e293b',
+					'editor.selectionBackground': '#3b82f633',
+					'editor.inactiveSelectionBackground': '#3b82f622',
+					'editorCursor.foreground': '#2563eb',
+					'editorWhitespace.foreground': '#e2e8f0',
+					'editorIndentGuide.background': '#e2e8f080',
+					'editorIndentGuide.activeBackground': '#94a3b880',
+					'scrollbarSlider.background': '#94a3b830',
+					'scrollbarSlider.hoverBackground': '#94a3b850',
+					'scrollbarSlider.activeBackground': '#94a3b870'
+				}
+			});
+
+			editor = monaco.editor.create(editorContainer!, {
+				value: content,
+				language: 'hcl',
+				theme: getMonacoThemeName(theme.current),
+				minimap: { enabled: false },
+				fontSize: 14,
+				lineNumbers: 'on',
+				scrollBeyondLastLine: false,
+				wordWrap: 'on',
+				tabSize: 2,
+				automaticLayout: true,
+				padding: { top: 16 },
+				fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+				renderLineHighlight: 'line',
+				overviewRulerLanes: 0,
+				hideCursorInOverviewRuler: true,
+				overviewRulerBorder: false,
+				scrollbar: {
+					verticalScrollbarSize: 8,
+					horizontalScrollbarSize: 8
+				}
+			});
+
+			editorInstance = editor;
+
+			// Track dirty state on content change
+			editor.onDidChangeModelContent(() => {
+				const currentValue = editor!.getValue();
+				content = currentValue;
+				dirty = currentValue !== originalContent;
+			});
+
+			// Cmd+S to save
+			editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+				handleSave();
+			});
+
+			// Escape to close
+			editor.addCommand(monaco.KeyCode.Escape, () => {
+				if (dirty) {
+					if (confirm('Discard changes?')) onclose();
+				} else {
+					onclose();
+				}
+			});
+
+			// Focus the editor
+			editor.focus();
+		})();
+
+		return () => {
+			disposed = true;
+			if (editor) {
+				editor.dispose();
+				editorInstance = undefined;
+			}
+		};
 	});
 
 	async function handleSave() {
@@ -84,56 +320,6 @@
 			saving = false;
 		}
 	}
-
-	function handleKeydown(e: KeyboardEvent) {
-		if (e.key === 's' && (e.metaKey || e.ctrlKey)) {
-			e.preventDefault();
-			handleSave();
-		}
-		if (e.key === 'Escape') {
-			if (dirty) {
-				if (confirm('Discard changes?')) onclose();
-			} else {
-				onclose();
-			}
-		}
-		if (e.key === 'Tab') {
-			e.preventDefault();
-			const target = e.target as HTMLTextAreaElement;
-			const start = target.selectionStart;
-			const end = target.selectionEnd;
-			content = content.substring(0, start) + '  ' + content.substring(end);
-			dirty = true;
-			requestAnimationFrame(() => {
-				target.selectionStart = target.selectionEnd = start + 2;
-			});
-		}
-	}
-
-	// Simple HCL syntax highlighting for the overlay
-	function highlightHCL(code: string): string {
-		return code
-			// Strings
-			.replace(/&/g, '&amp;')
-			.replace(/</g, '&lt;')
-			.replace(/>/g, '&gt;')
-			// Comments
-			.replace(/(#.*$|\/\/.*$)/gm, '<span class="hl-comment">$1</span>')
-			// Strings (double-quoted)
-			.replace(/("(?:[^"\\]|\\.)*")/g, '<span class="hl-string">$1</span>')
-			// Keywords
-			.replace(/\b(resource|data|variable|output|locals|module|provider|terraform|required_providers|required_version|for_each|count|depends_on|lifecycle|dynamic|content)\b/g, '<span class="hl-keyword">$1</span>')
-			// Booleans and null
-			.replace(/\b(true|false|null)\b/g, '<span class="hl-bool">$1</span>')
-			// Numbers
-			.replace(/\b(\d+)\b/g, '<span class="hl-number">$1</span>')
-			// Functions
-			.replace(/\b([a-z_]+)\s*\(/g, '<span class="hl-func">$1</span>(')
-			// Type keywords
-			.replace(/\b(string|number|bool|list|map|set|object|tuple|any)\b/g, '<span class="hl-type">$1</span>')
-			// References like var. local. data. module.
-			.replace(/\b(var|local|data|module|each|self)\./g, '<span class="hl-ref">$1</span>.');
-	}
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -167,22 +353,7 @@
 			{#if loading}
 				<div class="editor-loading">Loading...</div>
 			{:else}
-				<div class="line-numbers" aria-hidden="true">
-					{#each content.split('\n') as _, i}
-						<span>{(node?.source.startLine ?? 1) + i}</span>
-					{/each}
-				</div>
-				<div class="code-area">
-					<pre class="highlight-layer" aria-hidden="true">{@html highlightHCL(content)}{'\n'}</pre>
-					<textarea
-						class="editor-textarea"
-						bind:value={content}
-						oninput={() => (dirty = true)}
-						onkeydown={handleKeydown}
-						spellcheck="false"
-						autocomplete="off"
-					></textarea>
-				</div>
+				<div class="monaco-wrapper" bind:this={editorContainer}></div>
 			{/if}
 		</div>
 	</div>
@@ -329,101 +500,10 @@
 		color: var(--text-muted, #7982a9);
 	}
 
-	.line-numbers {
-		display: flex;
-		flex-direction: column;
-		padding: 16px 0;
-		min-width: 52px;
-		text-align: right;
-		padding-right: 12px;
-		color: var(--text-subtle, #565f89);
-		font-family: 'JetBrains Mono', 'Fira Code', monospace;
-		font-size: 14px;
-		line-height: 1.6;
-		user-select: none;
-		border-right: 1px solid var(--border, #2f3146);
-		background: var(--bg-base, #1a1b26);
-		overflow: hidden;
-	}
-
-	.line-numbers span {
-		padding: 0 4px;
-	}
-
-	.code-area {
-		flex: 1;
-		position: relative;
-		overflow: auto;
-		background: var(--bg-base, #1a1b26);
-		border-bottom-right-radius: 12px;
-	}
-
-	.highlight-layer {
-		position: absolute;
-		inset: 0;
-		padding: 16px;
-		margin: 0;
-		font-family: 'JetBrains Mono', 'Fira Code', monospace;
-		font-size: 14px;
-		line-height: 1.6;
-		white-space: pre;
-		pointer-events: none;
-		color: transparent;
-		overflow: hidden;
-	}
-
-	.editor-textarea {
-		position: relative;
+	.monaco-wrapper {
 		width: 100%;
 		height: 100%;
-		padding: 16px;
-		background: transparent;
-		color: var(--text, #c0caf5);
-		border: none;
-		outline: none;
-		resize: none;
-		font-family: 'JetBrains Mono', 'Fira Code', monospace;
-		font-size: 14px;
-		line-height: 1.6;
-		tab-size: 2;
-		white-space: pre;
-		caret-color: var(--accent, #7aa2f7);
-		/* Make text transparent so highlight layer shows through */
-		color: transparent;
-		-webkit-text-fill-color: transparent;
-	}
-
-	/* Fallback: if highlight layer doesn't work, show text */
-	.editor-textarea:focus {
-		color: transparent;
-		-webkit-text-fill-color: transparent;
-	}
-
-	/* Syntax highlighting colors */
-	:global(.hl-comment) {
-		color: var(--text-subtle, #565f89);
-		font-style: italic;
-	}
-	:global(.hl-string) {
-		color: #9ece6a;
-	}
-	:global(.hl-keyword) {
-		color: #bb9af7;
-		font-weight: 600;
-	}
-	:global(.hl-bool) {
-		color: #ff9e64;
-	}
-	:global(.hl-number) {
-		color: #ff9e64;
-	}
-	:global(.hl-func) {
-		color: #7aa2f7;
-	}
-	:global(.hl-type) {
-		color: #2ac3de;
-	}
-	:global(.hl-ref) {
-		color: #73daca;
+		border-radius: 0 0 12px 12px;
+		overflow: hidden;
 	}
 </style>
